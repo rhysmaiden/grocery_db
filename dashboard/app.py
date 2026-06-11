@@ -84,10 +84,20 @@ def attribute_history(product_id: int) -> pd.DataFrame:
 
 
 def history_figure(traces: list[tuple[str, pd.DataFrame]], attr_events: pd.DataFrame | None = None):
-    """Step chart of price histories; vertical markers for attribute changes."""
+    """Step chart of price histories; vertical markers for attribute changes.
+
+    Chains often charge the same price, putting lines exactly on top of each
+    other — distinct dash patterns and widths keep coincident lines visible.
+    """
+    line_styles = [
+        {"dash": "solid", "width": 3.5},
+        {"dash": "dash", "width": 2.5},
+        {"dash": "dot", "width": 1.8},
+    ]
     fig = go.Figure()
-    for label, hist in traces:
+    for i, (label, hist) in enumerate(traces):
         chain = label.split(":")[0]
+        style = line_styles[i % len(line_styles)]
         fig.add_trace(
             go.Scatter(
                 x=hist["date"],
@@ -96,6 +106,10 @@ def history_figure(traces: list[tuple[str, pd.DataFrame]], attr_events: pd.DataF
                 mode="lines+markers",
                 line_shape="hv",
                 line_color=CHAIN_COLOURS.get(chain),
+                line_dash=style["dash"],
+                line_width=style["width"],
+                marker_size=6,
+                opacity=0.85,
             )
         )
     if attr_events is not None:

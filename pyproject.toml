@@ -16,6 +16,9 @@ dependencies = [
 [project.optional-dependencies]
 coles-browser = [
     "camoufox[geoip]>=0.4",
+    # 1.60 driver crashes camoufox ("Connection closed while reading from
+    # the driver"); see https://github.com/daijro/camoufox/issues/617
+    "playwright==1.58.0",
 ]
 dev = [
     "pytest>=8.0",
