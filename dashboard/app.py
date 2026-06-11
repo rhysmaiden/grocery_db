@@ -52,7 +52,11 @@ st.set_page_config(page_title="Grocery Prices AU", page_icon="🛒", layout="wid
 
 @st.cache_resource
 def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    # Open via the package so schema migrations apply regardless of which
+    # writer (CI or local) produced the database file.
+    from grocery_db import db as gdb
+
+    return gdb.connect(DB_PATH, check_same_thread=False)
 
 
 @st.cache_data(ttl=300)
