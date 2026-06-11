@@ -89,7 +89,7 @@ with tab_search:
         like = f"%{'%'.join(term.split())}%"
         results = query(
             f"""SELECT p.id, p.chain, p.brand, p.name, p.quantity, p.unit, p.category,
-                       p.last_seen, pe.price_c
+                       p.last_seen, p.image_url, pe.price_c
                 FROM products p
                 JOIN price_events pe ON pe.id =
                     (SELECT id FROM price_events WHERE product_id = p.id ORDER BY date DESC LIMIT 1)
@@ -116,7 +116,12 @@ with tab_search:
             rows = picked.selection.rows if picked else []
             if rows:
                 product = results.iloc[rows[0]]
-                st.subheader(f"{product['brand'] or ''} {product['name']} — {product['chain']}")
+                img_col, title_col = st.columns([1, 6])
+                if product["image_url"]:
+                    img_col.image(product["image_url"], width=120)
+                title_col.subheader(
+                    f"{product['brand'] or ''} {product['name']} — {product['chain']}"
+                )
                 hist = price_history(int(product["id"]))
                 attrs = attribute_history(int(product["id"]))
                 st.plotly_chart(
@@ -148,11 +153,15 @@ with tab_compare:
             .tolist().index(group_label)
         ]
         members = query(
-            """SELECT p.id, p.chain, p.brand, p.name, p.quantity, p.unit
+            """SELECT p.id, p.chain, p.brand, p.name, p.quantity, p.unit, p.image_url
                FROM match_members m JOIN products p ON p.id = m.product_id
                WHERE m.group_id = ?""",
             (int(group["id"]),),
         )
+        img_cols = st.columns(max(len(members), 1))
+        for col, (_, m) in zip(img_cols, members.iterrows()):
+            if m["image_url"]:
+                col.image(m["image_url"], width=110, caption=m["chain"])
         traces = [
             (f"{m['chain']}: {m['brand'] or ''} {m['name']}".strip(), price_history(int(m["id"])))
             for _, m in members.iterrows()

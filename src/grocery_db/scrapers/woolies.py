@@ -121,6 +121,7 @@ def normalize(raw: list[dict]) -> list[dict]:
                     "is_weighted": False,
                     "category": category,
                     "url": f"https://www.woolworths.com.au/shop/productdetails/{item['Stockcode']}",
+                    "image_url": item.get("MediumImageFile") or item.get("LargeImageFile"),
                 }
             )
     return out

@@ -17,6 +17,7 @@ def make_item(**overrides):
         "is_weighted": False,
         "category": "Dairy",
         "url": "https://example.com/123",
+        "image_url": "https://example.com/123.jpg",
     }
     item.update(overrides)
     return item

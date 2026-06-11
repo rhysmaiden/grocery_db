@@ -71,6 +71,14 @@ def normalize(raw: dict) -> list[dict]:
             quantity, unit = units.parse_str_unit(item.get("quantityUnit"))
         quantity, unit = units.normalise(quantity, unit)
         cats = item.get("categories") or []
+        assets = item.get("assets") or []
+        image_url = None
+        if assets:
+            image_url = (
+                assets[0]["url"]
+                .replace("{width}", "500")
+                .replace("{slug}", item.get("urlSlugText") or "product")
+            )
         out.append(
             {
                 "sku": item["sku"],
@@ -87,6 +95,7 @@ def normalize(raw: dict) -> list[dict]:
                 "url": f"https://www.aldi.com.au/product/{item['urlSlugText']}"
                 if item.get("urlSlugText")
                 else None,
+                "image_url": image_url,
             }
         )
     return out

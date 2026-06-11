@@ -313,6 +313,12 @@ def normalize(raw: list[dict]) -> list[dict]:
                 continue
             quantity, unit = _quantity_and_unit(item)
             quantity, unit = units.normalise(quantity, unit)
+            image_uris = item.get("imageUris") or []
+            image_url = (
+                f"https://productimages.coles.com.au/productimages{image_uris[0]['uri']}"
+                if image_uris
+                else None
+            )
             was = pricing.get("was")
             price_c = int(round(pricing["now"] * 100))
             was_c = int(round(was * 100)) if was else None
@@ -330,6 +336,7 @@ def normalize(raw: list[dict]) -> list[dict]:
                     "is_weighted": (pricing.get("unit") or {}).get("isWeighted", False),
                     "category": category,
                     "url": f"https://www.coles.com.au/product/{item['id']}",
+                    "image_url": image_url,
                 }
             )
     return out

@@ -59,8 +59,8 @@ def ingest_items(
             cur = conn.execute(
                 """INSERT INTO products
                    (chain, sku, name, brand, description, quantity, unit,
-                    is_weighted, category, url, first_seen, last_seen, source)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    is_weighted, category, url, image_url, first_seen, last_seen, source)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     chain,
                     item["sku"],
@@ -72,6 +72,7 @@ def ingest_items(
                     int(item["is_weighted"]),
                     item["category"],
                     item["url"],
+                    item.get("image_url"),
                     date,
                     date,
                     source,
@@ -81,21 +82,24 @@ def ingest_items(
             stats["products_new"] += 1
         else:
             product_id = row["id"]
-            if date > row["last_seen"]:
-                for field in TRACKED_ATTRIBUTES:
-                    old, new = row[field], item[field]
-                    if new is not None and old != new:
-                        conn.execute(
-                            """INSERT INTO attribute_events
-                               (product_id, date, field, old_value, new_value)
-                               VALUES (?, ?, ?, ?, ?)""",
-                            (product_id, date, field, str(old), str(new)),
-                        )
-                        stats["attribute_events"] += 1
+            if date >= row["last_seen"]:
+                # Attribute change events only across days; same-day re-ingest
+                # still refreshes the columns but must stay event-idempotent.
+                if date > row["last_seen"]:
+                    for field in TRACKED_ATTRIBUTES:
+                        old, new = row[field], item[field]
+                        if new is not None and old != new:
+                            conn.execute(
+                                """INSERT INTO attribute_events
+                                   (product_id, date, field, old_value, new_value)
+                                   VALUES (?, ?, ?, ?, ?)""",
+                                (product_id, date, field, str(old), str(new)),
+                            )
+                            stats["attribute_events"] += 1
                 conn.execute(
                     """UPDATE products SET name = ?, brand = ?, description = ?,
                        quantity = ?, unit = ?, is_weighted = ?, category = ?,
-                       url = ?, last_seen = ? WHERE id = ?""",
+                       url = ?, image_url = ?, last_seen = ? WHERE id = ?""",
                     (
                         item["name"],
                         item["brand"],
@@ -105,6 +109,7 @@ def ingest_items(
                         int(item["is_weighted"]),
                         item["category"],
                         item["url"],
+                        item.get("image_url") or row["image_url"],
                         date,
                         product_id,
                     ),

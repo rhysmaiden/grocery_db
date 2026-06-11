@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS products (
     is_weighted INTEGER NOT NULL DEFAULT 0,
     category TEXT,
     url TEXT,
+    image_url TEXT,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     source TEXT NOT NULL DEFAULT 'scrape',
@@ -93,4 +94,13 @@ def connect(db_path: Path | str = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
     conn.executescript(SCHEMA)
+    _migrate(conn)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection):
+    """Additive migrations for databases created before a column existed."""
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(products)")}
+    if "image_url" not in cols:
+        conn.execute("ALTER TABLE products ADD COLUMN image_url TEXT")
+        conn.commit()
