@@ -17,25 +17,23 @@ env:
   AWS_DEFAULT_REGION: auto
 
 jobs:
+  # Coles is absent: their bot wall blocks datacenter IPs outright (even
+  # hotprices-au abandoned GitHub runners in Oct 2025). The ingest job
+  # imports hotprices.org's Coles data instead; a raw dump pushed from a
+  # residential IP (gdb scrape coles && gdb push-raw coles) takes
+  # precedence automatically if present.
   scrape:
     strategy:
-      fail-fast: false # one chain's bot wall must not stop the others
+      fail-fast: false # one chain's failure must not stop the others
       matrix:
-        chain: [aldi, coles, woolies]
+        chain: [aldi, woolies]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - name: Install stealth browser for Coles
-        if: matrix.chain == 'coles'
-        run: |
-          uv sync --extra coles-browser
-          uv run python -m camoufox fetch
       - name: Scrape ${{ matrix.chain }} (live log -> R2 logs/<date>/<chain>.log)
-        env:
-          GDB_COLES_BROWSER: ${{ matrix.chain == 'coles' && '1' || '' }}
         shell: bash
         run: |
           DATE=$(TZ=Australia/Sydney date +%F)

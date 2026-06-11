@@ -50,11 +50,24 @@ uv run gdb stats
    pull DB → scrape+ingest each chain (staleness guard: fails if a chain
    returns <50% of its previous catalogue) → push raw dumps + DB.
 
-Note: Coles/Woolies tolerate GitHub runner IPs (proven daily by hotprices-au);
-Aldi's Akamai is untested from runners — watch the first scheduled run. If it
-fails there, options are a residential proxy for the Aldi leg or running it
-locally. All scrapers use `curl_cffi` Chrome TLS impersonation; plain
-requests are blocked by Aldi.
+Per-chain sourcing reality (established 2026-06-11):
+
+- **Aldi**: scraped directly in CI — works fine from runner IPs.
+- **Woolies**: scraped directly in CI (concurrent page fetching; runners are
+  slow but tolerated).
+- **Coles**: their bot wall blocks datacenter IPs outright — even
+  hotprices-au abandoned GitHub runners (Oct 2025). CI imports
+  hotprices.org's daily Coles data via the ingest fallback instead. For
+  first-party Coles data, run `gdb scrape coles && gdb push-raw coles` from
+  a residential IP before 1am UTC — the ingest job prefers a present raw
+  dump over the fallback automatically. (`curl_cffi` suffices residentially;
+  `GDB_COLES_BROWSER=1` + the `coles-browser` extra force the camoufox
+  stealth browser, which still can't beat the IP block from datacenters.)
+
+All scrapers use `curl_cffi` Chrome TLS impersonation; plain requests are
+blocked by Aldi's Akamai. The same fallback covers Woolies if its scrape
+fails. Aldi has no fallback anywhere — its scrape failing means a real gap,
+which is why it runs first and simplest.
 
 ### Dashboard
 
