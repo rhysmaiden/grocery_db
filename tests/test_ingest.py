@@ -88,3 +88,22 @@ def test_staleness_guard(conn):
         ingest.check_staleness(conn, "coles", "2026-06-02", 4)
     # 50%+ is fine
     ingest.check_staleness(conn, "coles", "2026-06-02", 5)
+
+
+def test_first_scrape_of_backfilled_product_rebaselines_silently(conn):
+    ingest.ingest_items(
+        conn, "coles", "2026-06-01", [make_item(name="Hotprices Name")],
+        source="hotprices_backfill",
+    )
+    stats = ingest.ingest_items(
+        conn, "coles", "2026-06-02", [make_item(name="Scraper Name")]
+    )
+    assert stats["attribute_events"] == 0
+    row = conn.execute("SELECT name, source FROM products").fetchone()
+    assert row["name"] == "Scraper Name"
+    assert row["source"] == "scrape"
+    # subsequent scrape-vs-scrape changes are real events again
+    stats = ingest.ingest_items(
+        conn, "coles", "2026-06-03", [make_item(name="Renamed Product")]
+    )
+    assert stats["attribute_events"] == 1

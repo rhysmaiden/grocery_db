@@ -85,7 +85,10 @@ def ingest_items(
             if date >= row["last_seen"]:
                 # Attribute change events only across days; same-day re-ingest
                 # still refreshes the columns but must stay event-idempotent.
-                if date > row["last_seen"]:
+                # Cross-source diffs (scrape vs hotprices-normalised values)
+                # are systematic noise, not real changes — the first scrape of
+                # a backfilled product rebaselines silently.
+                if date > row["last_seen"] and row["source"] == source:
                     for field in TRACKED_ATTRIBUTES:
                         old, new = row[field], item[field]
                         if new is not None and old != new:
@@ -96,10 +99,13 @@ def ingest_items(
                                 (product_id, date, field, str(old), str(new)),
                             )
                             stats["attribute_events"] += 1
+                # products.source tracks who provided the current attribute
+                # values; price_events carry their own per-row source.
                 conn.execute(
                     """UPDATE products SET name = ?, brand = ?, description = ?,
                        quantity = ?, unit = ?, is_weighted = ?, category = ?,
-                       url = ?, image_url = ?, last_seen = ? WHERE id = ?""",
+                       url = ?, image_url = ?, last_seen = ?, source = ?
+                       WHERE id = ?""",
                     (
                         item["name"],
                         item["brand"],
@@ -111,6 +117,7 @@ def ingest_items(
                         item["url"],
                         item.get("image_url") or row["image_url"],
                         date,
+                        source,
                         product_id,
                     ),
                 )
