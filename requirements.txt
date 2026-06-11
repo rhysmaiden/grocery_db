@@ -1,0 +1,6 @@
+# For Streamlit Community Cloud (dashboard only).
+# Local/CI dependency management is uv + pyproject.toml.
+streamlit>=1.36
+pandas>=2.0
+plotly>=5.20
+boto3>=1.34

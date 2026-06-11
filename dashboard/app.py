@@ -1,9 +1,12 @@
-"""Local dashboard over the grocery price database.
+"""Dashboard over the grocery price database.
 
-Run:  uv run --extra dashboard streamlit run dashboard/app.py
-Pull a fresh DB first with:  uv run gdb pull
+Local:  uv run --extra dashboard streamlit run dashboard/app.py
+        (pull a fresh DB first with `uv run gdb pull`)
+Hosted: if data/grocery.db is missing and R2 credentials exist in
+        st.secrets or the environment, the app downloads the DB itself.
 """
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -12,6 +15,35 @@ import plotly.graph_objects as go
 import streamlit as st
 
 DB_PATH = Path("data/grocery.db")
+
+
+def _r2_setting(key: str) -> str | None:
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+    return os.environ.get(key)
+
+
+def ensure_db() -> bool:
+    if DB_PATH.exists():
+        return True
+    if not _r2_setting("R2_ENDPOINT_URL"):
+        return False
+    import boto3
+
+    with st.spinner("Downloading price database from R2…"):
+        client = boto3.client(
+            "s3",
+            endpoint_url=_r2_setting("R2_ENDPOINT_URL"),
+            aws_access_key_id=_r2_setting("R2_ACCESS_KEY_ID"),
+            aws_secret_access_key=_r2_setting("R2_SECRET_ACCESS_KEY"),
+            region_name="auto",
+        )
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        client.download_file(_r2_setting("R2_BUCKET"), "grocery.db", str(DB_PATH))
+    return True
 
 CHAIN_COLOURS = {"coles": "#e01a22", "woolies": "#178841", "aldi": "#00a8e1"}
 
@@ -74,9 +106,22 @@ def history_figure(traces: list[tuple[str, pd.DataFrame]], attr_events: pd.DataF
     return fig
 
 
-if not DB_PATH.exists():
-    st.error("No database at data/grocery.db — run `uv run gdb pull` (or backfill/scrape) first.")
+if not ensure_db():
+    st.error(
+        "No database at data/grocery.db — run `uv run gdb pull` locally, "
+        "or provide R2_* credentials in secrets for hosted use."
+    )
     st.stop()
+
+freshness = query("SELECT MAX(date) AS d FROM price_events").iloc[0]["d"]
+left, right = st.columns([5, 1])
+left.caption(f"🛒 Woolworths · Coles · Aldi — price data to **{freshness}**")
+if right.button("Refresh data"):
+    get_conn().close()
+    st.cache_resource.clear()
+    st.cache_data.clear()
+    DB_PATH.unlink(missing_ok=True)
+    st.rerun()
 
 tab_search, tab_compare, tab_health = st.tabs(["🔍 Search & history", "⚖️ Cross-chain compare", "📊 Data health"])
 
@@ -107,11 +152,14 @@ with tab_search:
                 lambda r: f"{r['quantity']:g}{r['unit']}" if pd.notna(r["quantity"]) else "", axis=1
             )
             picked = st.dataframe(
-                results[["chain", "brand", "name", "size", "price", "category", "last_seen"]],
+                results[["image_url", "chain", "brand", "name", "size", "price", "category", "last_seen"]],
                 on_select="rerun",
                 selection_mode="single-row",
                 hide_index=True,
                 use_container_width=True,
+                column_config={
+                    "image_url": st.column_config.ImageColumn("", width="small"),
+                },
             )
             rows = picked.selection.rows if picked else []
             if rows:
@@ -158,17 +206,13 @@ with tab_compare:
                WHERE m.group_id = ?""",
             (int(group["id"]),),
         )
-        img_cols = st.columns(max(len(members), 1))
-        for col, (_, m) in zip(img_cols, members.iterrows()):
-            if m["image_url"]:
-                col.image(m["image_url"], width=110, caption=m["chain"])
         traces = [
             (f"{m['chain']}: {m['brand'] or ''} {m['name']}".strip(), price_history(int(m["id"])))
             for _, m in members.iterrows()
         ]
         st.plotly_chart(history_figure(traces), use_container_width=True)
         latest = query(
-            f"""SELECT p.chain, p.brand || ' ' || p.name AS product,
+            f"""SELECT p.image_url, p.chain, p.brand || ' ' || p.name AS product,
                        p.quantity, p.unit, pe.price_c
                 FROM match_members m
                 JOIN products p ON p.id = m.product_id
@@ -184,7 +228,12 @@ with tab_compare:
             if pd.notna(r["quantity"]) and r["quantity"] else "",
             axis=1,
         )
-        st.dataframe(latest[["chain", "product", "price", "$/unit"]], hide_index=True, use_container_width=True)
+        st.dataframe(
+            latest[["image_url", "chain", "product", "price", "$/unit"]],
+            hide_index=True,
+            use_container_width=True,
+            column_config={"image_url": st.column_config.ImageColumn("", width="small")},
+        )
 
 with tab_health:
     runs = query(
