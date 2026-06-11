@@ -750,16 +750,14 @@ source = { editable = "." }
 dependencies = [
     { name = "boto3" },
     { name = "curl-cffi" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "streamlit" },
 ]
 
 [package.optional-dependencies]
 coles-browser = [
     { name = "camoufox", extra = ["geoip"] },
-]
-dashboard = [
-    { name = "pandas" },
-    { name = "plotly" },
-    { name = "streamlit" },
 ]
 dev = [
     { name = "pytest" },
@@ -770,12 +768,12 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.34" },
     { name = "camoufox", extras = ["geoip"], marker = "extra == 'coles-browser'", specifier = ">=0.4" },
     { name = "curl-cffi", specifier = ">=0.7" },
-    { name = "pandas", marker = "extra == 'dashboard'", specifier = ">=2.0" },
-    { name = "plotly", marker = "extra == 'dashboard'", specifier = ">=5.20" },
+    { name = "pandas", specifier = ">=2.0" },
+    { name = "plotly", specifier = ">=5.20" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "streamlit", marker = "extra == 'dashboard'", specifier = ">=1.36" },
+    { name = "streamlit", specifier = ">=1.36" },
 ]
-provides-extras = ["coles-browser", "dashboard", "dev"]
+provides-extras = ["coles-browser", "dev"]
 
 [[package]]
 name = "h11"

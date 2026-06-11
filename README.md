@@ -26,7 +26,7 @@ original (their API launched with online shopping; no public history exists).
 
 ```bash
 uv sync                                  # core (scrape/ingest)
-uv sync --extra dashboard --extra dev    # everything
+uv sync --extra dev                      # everything (dashboard deps are core)
 uv run pytest tests/                     # sanity check
 ```
 
@@ -60,7 +60,7 @@ requests are blocked by Aldi.
 
 ```bash
 uv run gdb pull        # fresh DB from R2
-uv run --extra dashboard streamlit run dashboard/app.py
+uv run streamlit run dashboard/app.py
 ```
 
 Tabs: product search + price history (with shrinkflation markers),

@@ -1,6 +1,6 @@
 """Dashboard over the grocery price database.
 
-Local:  uv run --extra dashboard streamlit run dashboard/app.py
+Local:  uv run streamlit run dashboard/app.py
         (pull a fresh DB first with `uv run gdb pull`)
 Hosted: if data/grocery.db is missing and R2 credentials exist in
         st.secrets or the environment, the app downloads the DB itself.
