@@ -1,11 +1,23 @@
-"""Woolworths scraper. Fetch logic ported from hotprices-au (MIT)."""
+"""Woolworths scraper. Fetch logic ported from hotprices-au (MIT).
+
+Pages within a category are fetched by a small thread pool with no
+inter-page delay: hotprices-au has scraped Woolies daily for years with
+sequential no-delay pulls (~20 min), so modest concurrency is well within
+what the API tolerates — and runner-to-API latency otherwise blows the
+45-minute chain budget.
+"""
 
 import json
+import math
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from . import common
 
 CHAIN = "woolies"
 PAGE_SIZE = 36  # larger sizes error out
+MAX_CATEGORY_PRODUCTS = 10_000  # API returns nothing past this
+WORKERS = 4
 
 SKIP_CATEGORY_IDS = {
     "specialsgroup",  # duplicate products
@@ -37,11 +49,32 @@ def _category_request(cat_id: str, page: int) -> dict:
     }
 
 
-def scrape(quick: bool = False) -> list[dict]:
-    session = common.new_session()
-    common.fetch(session, "GET", "https://www.woolworths.com.au", ok_html=True)
+_tls = threading.local()
+
+
+def _session():
+    """One bootstrapped session per worker thread (curl_cffi sessions are
+    not thread-safe)."""
+    if not hasattr(_tls, "session"):
+        session = common.new_session()
+        common.fetch(session, "GET", "https://www.woolworths.com.au", ok_html=True)
+        _tls.session = session
+    return _tls.session
+
+
+def _fetch_page(cat_id: str, page: int) -> dict:
     resp = common.fetch(
-        session, "GET", "https://www.woolworths.com.au/apis/ui/PiesCategoriesWithSpecials"
+        _session(),
+        "POST",
+        "https://www.woolworths.com.au/apis/ui/browse/category",
+        json=_category_request(cat_id, page),
+    )
+    return resp.json()
+
+
+def scrape(quick: bool = False) -> list[dict]:
+    resp = common.fetch(
+        _session(), "GET", "https://www.woolworths.com.au/apis/ui/PiesCategoriesWithSpecials"
     )
     categories = [
         c
@@ -50,29 +83,23 @@ def scrape(quick: bool = False) -> list[dict]:
     ]
     if quick:
         categories = categories[:1]
-    for cat in categories:
-        cat_id = cat["NodeId"]
-        print(f"woolies: category {cat_id} ({cat['Description']})")
-        bundles = []
-        page = 1
-        while True:
-            resp = common.fetch(
-                session,
-                "POST",
-                "https://www.woolworths.com.au/apis/ui/browse/category",
-                json=_category_request(cat_id, page),
+    with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        for cat in categories:
+            cat_id = cat["NodeId"]
+            first = _fetch_page(cat_id, 1)
+            bundles = list(first["Bundles"])
+            total = min(first["TotalRecordCount"], MAX_CATEGORY_PRODUCTS)
+            page_count = math.ceil(total / PAGE_SIZE)
+            if not quick and page_count > 1:
+                for data in pool.map(
+                    lambda p: _fetch_page(cat_id, p), range(2, page_count + 1)
+                ):
+                    bundles.extend(data["Bundles"])
+            cat["Products"] = bundles
+            print(
+                f"woolies: category {cat_id} ({cat['Description']}): "
+                f"{len(bundles)} bundles / {page_count} pages"
             )
-            data = resp.json()
-            bundles.extend(data["Bundles"])
-            if (
-                quick
-                or len(bundles) >= data["TotalRecordCount"]
-                or not data["Bundles"]
-            ):
-                break
-            page += 1
-            common.pause()
-        cat["Products"] = bundles
     return categories
 
 
