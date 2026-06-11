@@ -28,7 +28,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
+      - name: Install stealth browser for Coles
+        if: matrix.chain == 'coles'
+        run: |
+          uv sync --extra coles-browser
+          uv run python -m camoufox fetch
       - name: Scrape ${{ matrix.chain }} (live log -> R2 logs/<date>/<chain>.log)
+        env:
+          GDB_COLES_BROWSER: ${{ matrix.chain == 'coles' && '1' || '' }}
         shell: bash
         run: |
           DATE=$(TZ=Australia/Sydney date +%F)

@@ -30,6 +30,11 @@ def set_deadline(seconds: float | None):
     _deadline = None if seconds is None else time.monotonic() + seconds
 
 
+def check_deadline():
+    if _deadline is not None and time.monotonic() > _deadline:
+        raise ChainTimeout("chain scrape exceeded its time budget")
+
+
 def today() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%d")
 
@@ -44,8 +49,7 @@ def fetch(session, method: str, url: str, *, ok_html=False, **kwargs):
     """Request with retries and backoff. Raises after RETRIES failures."""
     last_err = None
     for attempt in range(RETRIES):
-        if _deadline is not None and time.monotonic() > _deadline:
-            raise ChainTimeout("chain scrape exceeded its time budget")
+        check_deadline()
         try:
             resp = session.request(method, url, timeout=60, **kwargs)
             if resp.status_code == 200:

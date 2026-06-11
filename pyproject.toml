@@ -9,6 +9,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+coles-browser = [
+    "camoufox[geoip]>=0.4",
+]
 dashboard = [
     "streamlit>=1.36",
     "pandas>=2.0",
