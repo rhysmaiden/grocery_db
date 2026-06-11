@@ -172,7 +172,9 @@ def unit_price(price_c, quantity, unit) -> str:
 
 
 def card_title(brand, name) -> str:
-    if brand and not name.lower().startswith(brand.lower()):
+    # SQL NULLs arrive from pandas as NaN (truthy float), not None
+    name = name if isinstance(name, str) else ""
+    if isinstance(brand, str) and brand and not name.lower().startswith(brand.lower()):
         return f"{brand} {name}"
     return name
 
@@ -181,7 +183,7 @@ def show_detail(product):
     img_col, title_col = st.columns([1, 6])
     if product["image_url"]:
         img_col.image(product["image_url"], width=120)
-    title_col.subheader(f"{product['brand'] or ''} {product['name']} — {product['chain']}")
+    title_col.subheader(f"{card_title(product['brand'], product['name'])} — {product['chain']}")
     hist = price_history(int(product["id"]))
     attrs = attribute_history(int(product["id"]))
     st.plotly_chart(
@@ -303,12 +305,13 @@ with tab_compare:
             (int(group["id"]),),
         )
         traces = [
-            (f"{m['chain']}: {m['brand'] or ''} {m['name']}".strip(), price_history(int(m["id"])))
+            (f"{m['chain']}: {card_title(m['brand'], m['name'])}", price_history(int(m["id"])))
             for _, m in members.iterrows()
         ]
         st.plotly_chart(history_figure(traces), use_container_width=True)
         latest = query(
-            f"""SELECT p.image_url, p.chain, p.brand || ' ' || p.name AS product,
+            f"""SELECT p.image_url, p.chain,
+                       COALESCE(p.brand || ' ', '') || p.name AS product,
                        p.quantity, p.unit, pe.price_c
                 FROM match_members m
                 JOIN products p ON p.id = m.product_id
