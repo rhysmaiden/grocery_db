@@ -136,6 +136,48 @@ def _hotprices_fallback(chain: str, db_path: str) -> bool:
         return False
 
 
+def cmd_push_raw(args) -> int:
+    r2.push_raw(args.chain, args.date or common.today())
+    return 0
+
+
+def cmd_daily_ingest(args) -> int:
+    """CI ingest job: runs after the parallel per-chain scrape jobs.
+
+    Pulls the DB and each chain's raw dump from R2; chains whose scrape job
+    failed (no dump) are covered by the hotprices fallback where possible.
+    Single writer, so no SQLite contention with the scrape jobs.
+    """
+    date = common.today()
+    r2.pull_db(Path(args.db))
+    failed = []
+    for chain in SCRAPERS:
+        if not common.raw_path(chain, date).exists() and not r2.pull_raw(chain, date):
+            print(f"{chain}: no raw dump on R2 for {date}")
+            if not _hotprices_fallback(chain, args.db):
+                failed.append(chain)
+            continue
+        ingest_rc = cmd_ingest(
+            argparse.Namespace(chain=chain, date=date, force=False, db=args.db)
+        )
+        if ingest_rc != 0:
+            failed.append(chain)
+    r2.push_db(Path(args.db))
+    if failed:
+        print(f"FAILED chains: {failed}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_logs(args) -> int:
+    log = r2.get_log(args.chain, args.date or common.today())
+    if log is None:
+        print(f"no log for {args.chain} on {args.date or common.today()}", file=sys.stderr)
+        return 1
+    print(log)
+    return 0
+
+
 def cmd_backfill(args) -> int:
     conn = db.connect(args.db)
     for chain in args.chains:
@@ -204,8 +246,21 @@ def main() -> int:
     p.add_argument("--force", action="store_true", help="skip staleness guard")
     p.set_defaults(func=cmd_ingest)
 
-    p = sub.add_parser("run-daily", help="full daily cycle with R2 sync (CI)")
+    p = sub.add_parser("run-daily", help="full daily cycle with R2 sync (single machine)")
     p.set_defaults(func=cmd_run_daily)
+
+    p = sub.add_parser("push-raw", help="upload a raw dump to R2 (CI scrape job)")
+    p.add_argument("chain", choices=list(SCRAPERS))
+    p.add_argument("--date", help="dump date (default: today AEST)")
+    p.set_defaults(func=cmd_push_raw)
+
+    p = sub.add_parser("daily-ingest", help="ingest all chains from R2 dumps (CI ingest job)")
+    p.set_defaults(func=cmd_daily_ingest)
+
+    p = sub.add_parser("logs", help="show a CI scrape job's live log from R2")
+    p.add_argument("chain", choices=list(SCRAPERS))
+    p.add_argument("--date", help="log date (default: today AEST)")
+    p.set_defaults(func=cmd_logs)
 
     p = sub.add_parser("backfill", help="import hotprices.org history")
     p.add_argument("chains", nargs="*", default=["coles", "woolies"],

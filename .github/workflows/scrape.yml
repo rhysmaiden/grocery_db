@@ -5,27 +5,67 @@ on:
   schedule:
     - cron: "0 1 * * *" # 1am UTC ~ 11am AEST, window proven by hotprices-au
 
+env:
+  PYTHONUNBUFFERED: "1" # CI block-buffers stdout; progress must stream
+  R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+  R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  R2_BUCKET: ${{ secrets.R2_BUCKET }}
+  # aws cli reads these for the live-log uploads to R2
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: auto
+
 jobs:
   scrape:
+    strategy:
+      fail-fast: false # one chain's bot wall must not stop the others
+      matrix:
+        chain: [aldi, coles, woolies]
     runs-on: ubuntu-latest
-    timeout-minutes: 120
-    env:
-      PYTHONUNBUFFERED: "1" # CI block-buffers stdout; progress must stream
-      R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - run: uv sync
-      - run: uv run gdb run-daily
+      - name: Scrape ${{ matrix.chain }} (live log -> R2 logs/<date>/<chain>.log)
+        shell: bash
+        run: |
+          DATE=$(TZ=Australia/Sydney date +%F)
+          LOG_URI="s3://$R2_BUCKET/logs/$DATE/${{ matrix.chain }}.log"
+          : > scrape.log
+          upload_log() {
+            aws s3 cp scrape.log "$LOG_URI" --endpoint-url "$R2_ENDPOINT_URL" --no-progress >/dev/null 2>&1 || true
+          }
+          ( while sleep 30; do upload_log; done ) &
+          UPLOADER=$!
+          set +e
+          uv run gdb scrape ${{ matrix.chain }} 2>&1 | tee scrape.log
+          rc=${PIPESTATUS[0]}
+          kill $UPLOADER 2>/dev/null
+          echo "exit code: $rc" >> scrape.log
+          upload_log
+          if [ $rc -eq 0 ]; then
+            uv run gdb push-raw ${{ matrix.chain }}
+          fi
+          exit $rc
       - uses: actions/upload-artifact@v4
-        if: always() # also keep dumps from cancelled/timed-out runs
+        if: always()
         with:
-          name: raw-dumps
+          name: raw-${{ matrix.chain }}
           path: data/raw/
           retention-days: 7
+
+  ingest:
+    needs: scrape
+    if: always() # failed chains are covered by the hotprices fallback
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run gdb daily-ingest
 
   test:
     runs-on: ubuntu-latest

@@ -54,3 +54,31 @@ def push_raw(chain: str, date: str):
     key = f"raw/{chain}/{path.name}"
     _client().upload_file(str(path), _bucket(), key)
     print(f"pushed {path} -> {key}")
+
+
+def pull_raw(chain: str, date: str) -> bool:
+    """Download a raw dump from R2. Returns False if it doesn't exist."""
+    from .scrapers import common
+
+    client = _client()
+    path = common.raw_path(chain, date)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        client.download_file(_bucket(), f"raw/{chain}/{path.name}", str(path))
+        return True
+    except client.exceptions.ClientError as err:
+        if err.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return False
+        raise
+
+
+def get_log(chain: str, date: str) -> str | None:
+    """Fetch a scrape job's live log (uploaded by CI every ~30s)."""
+    client = _client()
+    try:
+        obj = client.get_object(Bucket=_bucket(), Key=f"logs/{date}/{chain}.log")
+        return obj["Body"].read().decode()
+    except client.exceptions.ClientError as err:
+        if err.response["Error"]["Code"] in ("404", "NoSuchKey"):
+            return None
+        raise
