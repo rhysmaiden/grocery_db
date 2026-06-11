@@ -151,12 +151,67 @@ if right.button("Refresh data"):
 
 tab_search, tab_compare, tab_health = st.tabs(["🔍 Search & history", "⚖️ Cross-chain compare", "📊 Data health"])
 
+def chain_badge(chain: str) -> str:
+    colour = CHAIN_COLOURS.get(chain, "#666")
+    return (
+        f'<span style="background:{colour};color:white;padding:1px 10px;'
+        f'border-radius:10px;font-size:0.78em;font-weight:600">{chain}</span>'
+    )
+
+
+# literal $ in st.markdown toggles LaTeX math mode; the entity doesn't
+DOLLAR = "&#36;"
+
+
+def unit_price(price_c, quantity, unit) -> str:
+    if pd.isna(quantity) or not quantity:
+        return ""
+    if unit in ("g", "ml"):
+        return f"{DOLLAR}{price_c / quantity / 100 * 100:.2f}/100{unit}"
+    return f"{DOLLAR}{price_c / quantity / 100:.2f}/{unit}"
+
+
+def card_title(brand, name) -> str:
+    if brand and not name.lower().startswith(brand.lower()):
+        return f"{brand} {name}"
+    return name
+
+
+def show_detail(product):
+    img_col, title_col = st.columns([1, 6])
+    if product["image_url"]:
+        img_col.image(product["image_url"], width=120)
+    title_col.subheader(f"{product['brand'] or ''} {product['name']} — {product['chain']}")
+    hist = price_history(int(product["id"]))
+    attrs = attribute_history(int(product["id"]))
+    st.plotly_chart(
+        history_figure([(f"{product['chain']}: {product['name']}", hist)], attrs),
+        use_container_width=True,
+    )
+    if not attrs.empty:
+        st.caption("Attribute changes (orange lines) — pack size changes are shrinkflation suspects.")
+
+
+CARD_COLS = 4
+PAGE_SIZE_CARDS = 24
+
 with tab_search:
-    col1, col2 = st.columns([3, 1])
+    col1, col2, col3 = st.columns([3, 1.2, 1])
     term = col1.text_input("Search products", placeholder="e.g. full cream milk 2l")
     chains = col2.multiselect("Chains", ["coles", "woolies", "aldi"], default=["coles", "woolies", "aldi"])
+    sort = col3.selectbox("Sort", ["Relevance", "Price ↑", "$/unit ↑"])
 
-    if term:
+    if st.session_state.get("last_search") != (term, tuple(chains), sort):
+        st.session_state.last_search = (term, tuple(chains), sort)
+        st.session_state.card_limit = PAGE_SIZE_CARDS
+        st.session_state.selected_product = None
+
+    if term and chains:
+        order = {
+            "Relevance": "p.last_seen DESC, pe.price_c",
+            "Price ↑": "pe.price_c",
+            "$/unit ↑": "CASE WHEN p.quantity > 0 THEN pe.price_c / p.quantity ELSE 1e9 END",
+        }[sort]
         like = f"%{'%'.join(term.split())}%"
         results = query(
             f"""SELECT p.id, p.chain, p.brand, p.name, p.quantity, p.unit, p.category,
@@ -166,44 +221,59 @@ with tab_search:
                     (SELECT id FROM price_events WHERE product_id = p.id ORDER BY date DESC LIMIT 1)
                 WHERE (COALESCE(p.brand, '') || ' ' || p.name) LIKE ? COLLATE NOCASE
                   AND p.chain IN ({','.join('?' * len(chains))})
-                ORDER BY p.last_seen DESC, pe.price_c
-                LIMIT 200""",
+                ORDER BY {order}
+                LIMIT 96""",
             (like, *chains),
         )
         if results.empty:
             st.info("No matches.")
         else:
-            results["price"] = results["price_c"].map(dollars)
-            results["size"] = results.apply(
-                lambda r: f"{r['quantity']:g}{r['unit']}" if pd.notna(r["quantity"]) else "", axis=1
-            )
-            picked = st.dataframe(
-                results[["image_url", "chain", "brand", "name", "size", "price", "category", "last_seen"]],
-                on_select="rerun",
-                selection_mode="single-row",
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "image_url": st.column_config.ImageColumn("", width="small"),
-                },
-            )
-            rows = picked.selection.rows if picked else []
-            if rows:
-                product = results.iloc[rows[0]]
-                img_col, title_col = st.columns([1, 6])
-                if product["image_url"]:
-                    img_col.image(product["image_url"], width=120)
-                title_col.subheader(
-                    f"{product['brand'] or ''} {product['name']} — {product['chain']}"
-                )
-                hist = price_history(int(product["id"]))
-                attrs = attribute_history(int(product["id"]))
-                st.plotly_chart(
-                    history_figure([(f"{product['chain']}: {product['name']}", hist)], attrs),
-                    use_container_width=True,
-                )
-                if not attrs.empty:
-                    st.caption("Attribute changes (orange lines) — pack size changes are shrinkflation suspects.")
+            selected_id = st.session_state.get("selected_product")
+            if selected_id is not None:
+                match = results[results["id"] == selected_id]
+                if not match.empty:
+                    show_detail(match.iloc[0])
+                    st.divider()
+
+            shown = results.head(st.session_state.card_limit)
+            for start in range(0, len(shown), CARD_COLS):
+                cols = st.columns(CARD_COLS)
+                for col, (_, r) in zip(cols, shown.iloc[start : start + CARD_COLS].iterrows()):
+                    with col.container(border=True, height=430):
+                        if r["image_url"]:
+                            st.markdown(
+                                f'<div style="height:170px;display:flex;align-items:center;'
+                                f'justify-content:center"><img src="{r["image_url"]}" '
+                                f'style="max-height:170px;max-width:100%"></div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                '<div style="height:170px;display:flex;align-items:center;'
+                                'justify-content:center;color:#ccc;font-size:3em">🛒</div>',
+                                unsafe_allow_html=True,
+                            )
+                        size = f"{r['quantity']:g}{r['unit']}" if pd.notna(r["quantity"]) else ""
+                        st.markdown(
+                            f"{chain_badge(r['chain'])}&nbsp; <small>{size}</small><br>"
+                            f"**{card_title(r['brand'], r['name'])}**",
+                            unsafe_allow_html=True,
+                        )
+                        per_unit = unit_price(r["price_c"], r["quantity"], r["unit"])
+                        st.markdown(
+                            f"<span style='font-size:1.5em;font-weight:700'>"
+                            f"{DOLLAR}{r['price_c'] / 100:.2f}</span>"
+                            f" <small style='color:#888'>{per_unit}</small>",
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("📈 History", key=f"hist-{r['id']}", use_container_width=True):
+                            st.session_state.selected_product = int(r["id"])
+                            st.rerun()
+            remaining = len(results) - len(shown)
+            if remaining > 0:
+                if st.button(f"Show more ({remaining} more)", use_container_width=True):
+                    st.session_state.card_limit += PAGE_SIZE_CARDS
+                    st.rerun()
     else:
         st.caption("Type to search across all chains.")
 
