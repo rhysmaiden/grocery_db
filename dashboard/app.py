@@ -149,7 +149,9 @@ if right.button("Refresh data"):
     DB_PATH.unlink(missing_ok=True)
     st.rerun()
 
-tab_search, tab_compare, tab_health = st.tabs(["🔍 Search & history", "⚖️ Cross-chain compare", "📊 Data health"])
+tab_search, tab_compare, tab_disc, tab_health = st.tabs(
+    ["🔍 Search & history", "⚖️ Cross-chain compare", "🪦 Discontinued", "📊 Data health"]
+)
 
 def chain_badge(chain: str) -> str:
     colour = CHAIN_COLOURS.get(chain, "#666")
@@ -196,6 +198,77 @@ def show_detail(product):
 
 CARD_COLS = 4
 PAGE_SIZE_CARDS = 24
+STALE_DAYS = 30  # not observed in any catalogue for this long = discontinued
+
+PRODUCT_SELECT = """
+    SELECT p.id, p.chain, p.brand, p.name, p.quantity, p.unit, p.category,
+           p.last_seen, p.image_url, pe.price_c
+    FROM products p
+    JOIN price_events pe ON pe.id =
+        (SELECT id FROM price_events WHERE product_id = p.id ORDER BY date DESC LIMIT 1)
+"""
+
+
+def render_product_cards(results, key_prefix: str, show_last_seen: bool = False):
+    limit_key = f"{key_prefix}_limit"
+    sel_key = f"{key_prefix}_selected"
+    if limit_key not in st.session_state:
+        st.session_state[limit_key] = PAGE_SIZE_CARDS
+
+    selected_id = st.session_state.get(sel_key)
+    if selected_id is not None:
+        match = results[results["id"] == selected_id]
+        if not match.empty:
+            show_detail(match.iloc[0])
+            st.divider()
+
+    shown = results.head(st.session_state[limit_key])
+    for start in range(0, len(shown), CARD_COLS):
+        cols = st.columns(CARD_COLS)
+        for col, (_, r) in zip(cols, shown.iloc[start : start + CARD_COLS].iterrows()):
+            with col.container(border=True, height=460 if show_last_seen else 430):
+                if r["image_url"]:
+                    st.markdown(
+                        f'<div style="height:170px;display:flex;align-items:center;'
+                        f'justify-content:center"><img src="{r["image_url"]}" '
+                        f'style="max-height:170px;max-width:100%"></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div style="height:170px;display:flex;align-items:center;'
+                        'justify-content:center;color:#ccc;font-size:3em">🛒</div>',
+                        unsafe_allow_html=True,
+                    )
+                size = f"{r['quantity']:g}{r['unit']}" if pd.notna(r["quantity"]) else ""
+                st.markdown(
+                    f"{chain_badge(r['chain'])}&nbsp; <small>{size}</small><br>"
+                    f"**{card_title(r['brand'], r['name'])}**",
+                    unsafe_allow_html=True,
+                )
+                per_unit = unit_price(r["price_c"], r["quantity"], r["unit"])
+                price_label = "last price " if show_last_seen else ""
+                st.markdown(
+                    f"<small style='color:#888'>{price_label}</small>"
+                    f"<span style='font-size:1.5em;font-weight:700'>"
+                    f"{DOLLAR}{r['price_c'] / 100:.2f}</span>"
+                    f" <small style='color:#888'>{per_unit}</small>",
+                    unsafe_allow_html=True,
+                )
+                if show_last_seen:
+                    st.markdown(
+                        f"<small style='color:#c00'>last seen {r['last_seen']}</small>",
+                        unsafe_allow_html=True,
+                    )
+                if st.button("📈 History", key=f"{key_prefix}-hist-{r['id']}", use_container_width=True):
+                    st.session_state[sel_key] = int(r["id"])
+                    st.rerun()
+    remaining = len(results) - len(shown)
+    if remaining > 0:
+        if st.button(f"Show more ({remaining} more)", key=f"{key_prefix}-more", use_container_width=True):
+            st.session_state[limit_key] += PAGE_SIZE_CARDS
+            st.rerun()
+
 
 with tab_search:
     col1, col2, col3 = st.columns([3, 1.2, 1])
@@ -205,8 +278,8 @@ with tab_search:
 
     if st.session_state.get("last_search") != (term, tuple(chains), sort):
         st.session_state.last_search = (term, tuple(chains), sort)
-        st.session_state.card_limit = PAGE_SIZE_CARDS
-        st.session_state.selected_product = None
+        st.session_state.search_limit = PAGE_SIZE_CARDS
+        st.session_state.search_selected = None
 
     if term and chains:
         order = {
@@ -216,68 +289,59 @@ with tab_search:
         }[sort]
         like = f"%{'%'.join(term.split())}%"
         results = query(
-            f"""SELECT p.id, p.chain, p.brand, p.name, p.quantity, p.unit, p.category,
-                       p.last_seen, p.image_url, pe.price_c
-                FROM products p
-                JOIN price_events pe ON pe.id =
-                    (SELECT id FROM price_events WHERE product_id = p.id ORDER BY date DESC LIMIT 1)
+            f"""{PRODUCT_SELECT}
                 WHERE (COALESCE(p.brand, '') || ' ' || p.name) LIKE ? COLLATE NOCASE
                   AND p.chain IN ({','.join('?' * len(chains))})
+                  AND p.last_seen >= date('now', '-{STALE_DAYS} days')
                 ORDER BY {order}
                 LIMIT 96""",
             (like, *chains),
         )
         if results.empty:
-            st.info("No matches.")
+            st.info("No matches in the current range (discontinued products live in their own tab).")
         else:
-            selected_id = st.session_state.get("selected_product")
-            if selected_id is not None:
-                match = results[results["id"] == selected_id]
-                if not match.empty:
-                    show_detail(match.iloc[0])
-                    st.divider()
-
-            shown = results.head(st.session_state.card_limit)
-            for start in range(0, len(shown), CARD_COLS):
-                cols = st.columns(CARD_COLS)
-                for col, (_, r) in zip(cols, shown.iloc[start : start + CARD_COLS].iterrows()):
-                    with col.container(border=True, height=430):
-                        if r["image_url"]:
-                            st.markdown(
-                                f'<div style="height:170px;display:flex;align-items:center;'
-                                f'justify-content:center"><img src="{r["image_url"]}" '
-                                f'style="max-height:170px;max-width:100%"></div>',
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.markdown(
-                                '<div style="height:170px;display:flex;align-items:center;'
-                                'justify-content:center;color:#ccc;font-size:3em">🛒</div>',
-                                unsafe_allow_html=True,
-                            )
-                        size = f"{r['quantity']:g}{r['unit']}" if pd.notna(r["quantity"]) else ""
-                        st.markdown(
-                            f"{chain_badge(r['chain'])}&nbsp; <small>{size}</small><br>"
-                            f"**{card_title(r['brand'], r['name'])}**",
-                            unsafe_allow_html=True,
-                        )
-                        per_unit = unit_price(r["price_c"], r["quantity"], r["unit"])
-                        st.markdown(
-                            f"<span style='font-size:1.5em;font-weight:700'>"
-                            f"{DOLLAR}{r['price_c'] / 100:.2f}</span>"
-                            f" <small style='color:#888'>{per_unit}</small>",
-                            unsafe_allow_html=True,
-                        )
-                        if st.button("📈 History", key=f"hist-{r['id']}", use_container_width=True):
-                            st.session_state.selected_product = int(r["id"])
-                            st.rerun()
-            remaining = len(results) - len(shown)
-            if remaining > 0:
-                if st.button(f"Show more ({remaining} more)", use_container_width=True):
-                    st.session_state.card_limit += PAGE_SIZE_CARDS
-                    st.rerun()
+            render_product_cards(results, "search")
     else:
         st.caption("Type to search across all chains.")
+
+with tab_disc:
+    st.caption(
+        f"Products not seen in any chain's catalogue for {STALE_DAYS}+ days — "
+        "delisted, seasonal, or renamed under a new product id. "
+        "Prices shown are the last ever observed."
+    )
+    d_col1, d_col2 = st.columns([3, 1])
+    d_term = d_col1.text_input("Search discontinued products", placeholder="e.g. salami")
+    d_chains = d_col2.multiselect(
+        "Chains", ["coles", "woolies", "aldi"], default=["coles", "woolies"], key="disc_chains"
+    )
+    if st.session_state.get("last_disc_search") != (d_term, tuple(d_chains)):
+        st.session_state.last_disc_search = (d_term, tuple(d_chains))
+        st.session_state.disc_limit = PAGE_SIZE_CARDS
+        st.session_state.disc_selected = None
+
+    if d_chains:
+        d_like = f"%{'%'.join(d_term.split())}%" if d_term else "%"
+        d_results = query(
+            f"""{PRODUCT_SELECT}
+                WHERE (COALESCE(p.brand, '') || ' ' || p.name) LIKE ? COLLATE NOCASE
+                  AND p.chain IN ({','.join('?' * len(d_chains))})
+                  AND p.last_seen < date('now', '-{STALE_DAYS} days')
+                ORDER BY p.last_seen DESC
+                LIMIT 96""",
+            (d_like, *d_chains),
+        )
+        total_stale = query(
+            f"""SELECT COUNT(*) AS n FROM products
+                WHERE chain IN ({','.join('?' * len(d_chains))})
+                  AND last_seen < date('now', '-{STALE_DAYS} days')""",
+            tuple(d_chains),
+        ).iloc[0]["n"]
+        st.caption(f"{total_stale:,} discontinued products in selected chains (most recently delisted first).")
+        if d_results.empty:
+            st.info("No matches.")
+        else:
+            render_product_cards(d_results, "disc", show_last_seen=True)
 
 with tab_compare:
     groups = query(
