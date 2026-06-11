@@ -26,10 +26,18 @@ def _r2_setting(key: str) -> str | None:
     return os.environ.get(key)
 
 
+MAX_DB_AGE_S = 12 * 3600  # hosted containers persist; don't serve stale data
+
+
 def ensure_db() -> bool:
+    have_r2 = bool(_r2_setting("R2_ENDPOINT_URL"))
     if DB_PATH.exists():
-        return True
-    if not _r2_setting("R2_ENDPOINT_URL"):
+        import time
+
+        if not have_r2 or time.time() - DB_PATH.stat().st_mtime < MAX_DB_AGE_S:
+            return True
+        DB_PATH.unlink()
+    if not have_r2:
         return False
     import boto3
 
@@ -156,7 +164,7 @@ with tab_search:
                 FROM products p
                 JOIN price_events pe ON pe.id =
                     (SELECT id FROM price_events WHERE product_id = p.id ORDER BY date DESC LIMIT 1)
-                WHERE (p.brand || ' ' || p.name) LIKE ? COLLATE NOCASE
+                WHERE (COALESCE(p.brand, '') || ' ' || p.name) LIKE ? COLLATE NOCASE
                   AND p.chain IN ({','.join('?' * len(chains))})
                 ORDER BY p.last_seen DESC, pe.price_c
                 LIMIT 200""",
