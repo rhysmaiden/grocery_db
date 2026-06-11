@@ -1,0 +1,36 @@
+name: Daily scrape
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *" # 1am UTC ~ 11am AEST, window proven by hotprices-au
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync
+      - run: uv run gdb run-daily
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: raw-dumps
+          path: data/raw/
+          retention-days: 7
+
+  test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --extra dev
+      - run: uv run pytest -v tests/
