@@ -23,12 +23,17 @@ def _chains(arg: str) -> list[str]:
     return list(SCRAPERS) if arg == "all" else [arg]
 
 
+# One chain may not eat the whole CI job; the others still need their day.
+CHAIN_TIME_BUDGET_S = 45 * 60
+
+
 def cmd_scrape(args) -> int:
     failed = []
     for chain in _chains(args.chain):
         date = common.today()
         started = datetime.now().isoformat(timespec="seconds")
         try:
+            common.set_deadline(CHAIN_TIME_BUDGET_S)
             raw = SCRAPERS[chain].scrape(quick=args.quick)
             path = common.save_raw(chain, date, raw)
             count = len(SCRAPERS[chain].normalize(raw))
@@ -43,6 +48,8 @@ def cmd_scrape(args) -> int:
         except Exception as err:
             print(f"{chain}: SCRAPE FAILED: {err}", file=sys.stderr)
             failed.append(chain)
+        finally:
+            common.set_deadline(None)
     return 1 if failed else 0
 
 
@@ -93,7 +100,8 @@ def cmd_run_daily(args) -> int:
             argparse.Namespace(chain=chain, quick=False, db=args.db)
         )
         if scrape_rc != 0:
-            failed.append(chain)
+            if not _hotprices_fallback(chain, args.db):
+                failed.append(chain)
             continue
         ingest_rc = cmd_ingest(
             argparse.Namespace(chain=chain, date=date, force=False, db=args.db)
@@ -107,6 +115,25 @@ def cmd_run_daily(args) -> int:
         print(f"FAILED chains: {failed}", file=sys.stderr)
         return 1
     return 0
+
+
+def _hotprices_fallback(chain: str, db_path: str) -> bool:
+    """When a coles/woolies scrape fails (e.g. bot wall on runner IPs),
+    import hotprices.org's latest published data so the chain stays gapless.
+    Returns True when the day is covered."""
+    if chain not in backfill_mod.URLS:
+        return False
+    print(f"{chain}: falling back to hotprices.org data")
+    try:
+        path = backfill_mod.download(chain)
+        conn = db.connect(db_path)
+        stats = backfill_mod.import_file(conn, chain, path)
+        conn.close()
+        print(f"{chain}: fallback import: {stats}")
+        return True
+    except Exception as err:
+        print(f"{chain}: FALLBACK FAILED: {err}", file=sys.stderr)
+        return False
 
 
 def cmd_backfill(args) -> int:

@@ -33,8 +33,12 @@ _CATEGORIES_QUERY = """
 """
 
 
+RESETS_MAX = 3
+
+
 class ColesSession:
     def __init__(self):
+        self.resets = 0
         self.session = common.new_session()
         self._bootstrap()
 
@@ -80,6 +84,23 @@ class ColesSession:
         return [c for c in items if c["seoToken"] not in SKIP_CATEGORIES]
 
     def get_category_page(self, slug: str, page: int) -> dict:
+        try:
+            return self._fetch_category_page(slug, page)
+        except common.ChainTimeout:
+            raise
+        except RuntimeError:
+            # Bot wall serves HTML on the data endpoint; a fresh session
+            # (new TLS fingerprint + cookies + key) sometimes gets through.
+            if self.resets >= RESETS_MAX:
+                raise
+            self.resets += 1
+            print(f"coles: bot wall on {slug} p{page}, resetting session "
+                  f"({self.resets}/{RESETS_MAX})")
+            self.session = common.new_session()
+            self._bootstrap()
+            return self._fetch_category_page(slug, page)
+
+    def _fetch_category_page(self, slug: str, page: int) -> dict:
         resp = common.fetch(
             self.session,
             "GET",

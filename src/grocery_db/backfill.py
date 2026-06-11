@@ -1,11 +1,17 @@
-"""One-off import of hotprices.org published history (Coles + Woolies).
+"""Import of hotprices.org published history (Coles + Woolies).
+
+Used two ways:
+- one-off initial backfill (~2.7 years of change-points), and
+- gap-fill fallback when a CI scrape of coles/woolies fails — their site
+  keeps collecting daily, so importing their latest file keeps those chains
+  gapless. Imports are idempotent: UNIQUE(product_id, date, store_id) plus
+  INSERT OR IGNORE means our own scraped events always win on collisions.
 
 Data format: heissepreise canonical JSON — a list of items each carrying a
-priceHistory of change-points (a point only when the price changed). That
-matches our price_events model directly. Rows are tagged
-source='hotprices_backfill' so they can be quarantined or re-imported.
+priceHistory of change-points (a point only when the price changed). Rows
+are tagged source='hotprices_backfill' so they can be quarantined.
 
-No Aldi backfill exists anywhere; Aldi history starts with our own scraping.
+No Aldi data exists here or anywhere; Aldi history is ours alone.
 """
 
 import gzip
@@ -54,17 +60,11 @@ def import_file(conn: sqlite3.Connection, chain: str, path: Path) -> dict:
             "SELECT id FROM products WHERE chain = ? AND sku = ?", (chain, sku)
         ).fetchone()
         if row is not None:
-            # Product already known (e.g. from our own scrapes): only add
-            # history strictly older than anything we have for it.
             product_id = row["id"]
-            oldest = conn.execute(
-                "SELECT MIN(date) AS d FROM price_events WHERE product_id = ?",
-                (product_id,),
-            ).fetchone()["d"]
-            history = [h for h in history if oldest is None or h["date"] < oldest]
-            if not history:
-                stats["skipped_existing"] += 1
-                continue
+            conn.execute(
+                "UPDATE products SET last_seen = ? WHERE id = ? AND last_seen < ?",
+                (max(dates), product_id, max(dates)),
+            )
         else:
             cur = conn.execute(
                 """INSERT INTO products

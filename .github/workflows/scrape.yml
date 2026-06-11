@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
+      PYTHONUNBUFFERED: "1" # CI block-buffers stdout; progress must stream
       R2_ENDPOINT_URL: ${{ secrets.R2_ENDPOINT_URL }}
       R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
       R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -20,7 +21,7 @@ jobs:
       - run: uv sync
       - run: uv run gdb run-daily
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always() # also keep dumps from cancelled/timed-out runs
         with:
           name: raw-dumps
           path: data/raw/

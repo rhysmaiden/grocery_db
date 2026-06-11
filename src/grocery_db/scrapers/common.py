@@ -16,6 +16,19 @@ TZ = ZoneInfo("Australia/Sydney")
 REQUEST_DELAY = 0.4
 RETRIES = 4
 
+# Wall-clock budget for one chain's scrape; keeps a slow/tarpitted chain
+# from eating the whole CI job (which would lose the other chains' day).
+_deadline: float | None = None
+
+
+class ChainTimeout(RuntimeError):
+    pass
+
+
+def set_deadline(seconds: float | None):
+    global _deadline
+    _deadline = None if seconds is None else time.monotonic() + seconds
+
 
 def today() -> str:
     return datetime.now(TZ).strftime("%Y-%m-%d")
@@ -31,6 +44,8 @@ def fetch(session, method: str, url: str, *, ok_html=False, **kwargs):
     """Request with retries and backoff. Raises after RETRIES failures."""
     last_err = None
     for attempt in range(RETRIES):
+        if _deadline is not None and time.monotonic() > _deadline:
+            raise ChainTimeout("chain scrape exceeded its time budget")
         try:
             resp = session.request(method, url, timeout=60, **kwargs)
             if resp.status_code == 200:
