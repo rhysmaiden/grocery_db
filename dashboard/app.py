@@ -26,31 +26,46 @@ def _r2_setting(key: str) -> str | None:
     return os.environ.get(key)
 
 
-MAX_DB_AGE_S = 12 * 3600  # hosted containers persist; don't serve stale data
+def _r2_client():
+    import boto3
+
+    return boto3.client(
+        "s3",
+        endpoint_url=_r2_setting("R2_ENDPOINT_URL"),
+        aws_access_key_id=_r2_setting("R2_ACCESS_KEY_ID"),
+        aws_secret_access_key=_r2_setting("R2_SECRET_ACCESS_KEY"),
+        region_name="auto",
+    )
+
+
+@st.cache_data(ttl=600)
+def _remote_db_mtime() -> float | None:
+    """When the DB on R2 was last pushed (checked at most every 10 min)."""
+    try:
+        head = _r2_client().head_object(Bucket=_r2_setting("R2_BUCKET"), Key="grocery.db")
+        return head["LastModified"].timestamp()
+    except Exception:
+        return None
 
 
 def ensure_db() -> bool:
     have_r2 = bool(_r2_setting("R2_ENDPOINT_URL"))
     if DB_PATH.exists():
-        import time
-
-        if not have_r2 or time.time() - DB_PATH.stat().st_mtime < MAX_DB_AGE_S:
+        if not have_r2:
             return True
+        remote_mtime = _remote_db_mtime()
+        if remote_mtime is None or DB_PATH.stat().st_mtime >= remote_mtime:
+            return True
+        # A newer DB was pushed: the cached sqlite connection still holds
+        # the old (soon to be unlinked) file, so drop all caches with it.
+        st.cache_resource.clear()
+        st.cache_data.clear()
         DB_PATH.unlink()
     if not have_r2:
         return False
-    import boto3
-
-    with st.spinner("Downloading price database from R2…"):
-        client = boto3.client(
-            "s3",
-            endpoint_url=_r2_setting("R2_ENDPOINT_URL"),
-            aws_access_key_id=_r2_setting("R2_ACCESS_KEY_ID"),
-            aws_secret_access_key=_r2_setting("R2_SECRET_ACCESS_KEY"),
-            region_name="auto",
-        )
+    with st.spinner("Downloading latest price database…"):
         DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        client.download_file(_r2_setting("R2_BUCKET"), "grocery.db", str(DB_PATH))
+        _r2_client().download_file(_r2_setting("R2_BUCKET"), "grocery.db", str(DB_PATH))
     return True
 
 CHAIN_COLOURS = {"coles": "#e01a22", "woolies": "#178841", "aldi": "#00a8e1"}
